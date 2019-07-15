@@ -1,5 +1,4 @@
 'use strict';
-
 // Application Dependencies
 const express = require('express');
 const superagent = require('superagent');
@@ -12,6 +11,9 @@ require('dotenv').config();
 // Application Setup
 const app = express();
 const PORT = process.env.PORT || 3000;
+const timeoutObj = {
+  'weathers': 15000
+}
 
 app.use(cors());
 
@@ -24,7 +26,8 @@ client.on('error', err => console.error(err));
 app.get('/location', getLocation);
 app.get('/weather', getWeather);
 app.get('/events', getEvents);
-
+// app.get('/movies', getMovies)
+// app.use('*', (req, res) => { res.send('im alive') })
 // Make sure the server is listening for requests
 app.listen(PORT, () => console.log(`Listening on ${PORT}`));
 
@@ -39,11 +42,10 @@ function handleError(err, res) {
 function lookup(options) {
   const SQL = `SELECT * FROM ${options.tableName} WHERE location_id=$1;`;
   const values = [options.location];
-
   client.query(SQL, values)
     .then(result => {
       if (result.rowCount > 0) {
-        options.cacheHit(result);
+        options.cacheHit(result, options.cacheMiss);
       } else {
         options.cacheMiss();
       }
@@ -99,8 +101,8 @@ Weather.lookup = lookup;
 
 Weather.prototype = {
   save: function (location_id) {
-    const SQL = `INSERT INTO ${this.tableName} (forecast, time, location_id) VALUES ($1, $2, $3);`;
-    const values = [this.forecast, this.time, location_id];
+    const SQL = `INSERT INTO ${this.tableName} (forecast, time, location_id, created_at) VALUES ($1, $2, $3, $4);`;
+    const values = [this.forecast, this.time, location_id, Date.now()];
 
     client.query(SQL, values);
   }
@@ -121,6 +123,45 @@ Event.prototype = {
   save: function (location_id) {
     const SQL = `INSERT INTO ${this.tableName} (link, name, event_date, summary, location_id) VALUES ($1, $2, $3, $4, $5);`;
     const values = [this.link, this.name, this.event_date, this.summary, location_id];
+
+    client.query(SQL, values);
+  }
+};
+
+function Movie(movie) {
+  this.tableName = 'movies';
+  this.lookup = lookup;
+  this.title = 'Sleepless in Seattle';
+  this.overview = 'A young boy who tries to set his dad up on a date after the death of his mother. He calls into a radio station to talk about his dad’s loneliness which soon leads the dad into meeting a Journalist Annie who flies to Seattle to write a story about the boy and his dad. Yet Annie ends up with more than just a story in this popular romantic comedy.';
+  this.average_votes = '6.60';
+  this.total_votes = '881';
+  this.image_url = 'https://image.tmdb.org/t/p/w200_and_h300_bestv2/afkYP15OeUOD0tFEmj6VvejuOcz.jpg';
+  this.popularity = '8.2340';
+  this.released_on = '1993-06-24';
+}
+Movie.lookup = lookup;
+
+Movie.prototype = {
+  save: function (location_id) {
+    const SQL = `INSERT INTO ${this.tableName} (
+      title,
+      overview,
+      average_votes,
+      total_votes,
+      image_url,
+      popularity,
+      released_on,
+      location_id) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`;
+    const values = [
+      this.title,
+      this.overview,
+      this.average_votes,
+      this.total_votes,
+      this.image_url,
+      this.popularity,
+      this.released_on,
+      location_id];
 
     client.query(SQL, values);
   }
@@ -156,8 +197,16 @@ function getWeather(request, response) {
 
     location: request.query.data.id,
 
-    cacheHit: function (result) {
-      response.send(result.rows);
+    cacheHit: function (result, cacheMiss) {
+      console.log('toots', Date.now() - result.rows[0].created_at);
+      if ((Date.now() - result.rows[0].created_at) > timeoutObj['weathers']) {
+        console.log('timedout');
+        client.query(`DELETE FROM weathers WHERE location_id=$1`, [result.rows[0].location_id])
+        cacheMiss();
+      } else {
+        console.log('fresh')
+        response.send(result.rows);
+      }
     },
 
     cacheMiss: function () {
@@ -197,7 +246,6 @@ function getEvents(request, response) {
             event.save(request.query.data.id);
             return event;
           });
-
           response.send(events);
         })
         .catch(error => handleError(error, response));
